@@ -112,7 +112,20 @@ If the run is interrupted, re-running automatically resumes from the last succes
 
 ## Reproduce
 
-### 1. Install
+### 1. Set up the environment
+
+A `.venv` virtual environment and `requirements.txt` are included in the repo.
+
+**Using the provided venv (Codespaces or local):**
+
+```bash
+python -m venv .venv
+source .venv/bin/activate        # macOS / Linux / Codespaces
+# .venv\Scripts\activate         # Windows
+pip install -r requirements.txt
+```
+
+**Or install the core dependencies directly:**
 
 ```bash
 pip install duckdb polars pyarrow requests lxml numpy
@@ -126,7 +139,9 @@ Requires Python 3.10+.
 python main.py
 ```
 
-Processes all yellow taxi files listed on the TLC website. To test on a smaller slice, edit the call at the bottom of `main.py`:
+Processes all yellow taxi files listed on the TLC website. The run resumes automatically from the last completed month if interrupted — no data is re-downloaded.
+
+To test on a smaller slice, edit the call at the bottom of `main.py`:
 
 ```python
 process_yellow(start_year=2023, end_year=2023)
