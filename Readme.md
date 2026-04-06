@@ -8,9 +8,9 @@ Finds all yellow taxi trips above the **90th percentile of trip distance**, acro
 
 | File | Description |
 |---|---|
-| `outliers_monthly.json` | Trips above the per-month 90th percentile, written incrementally as each file is processed |
+| `outliers_monthly.parquet` | Trips above the per-month 90th percentile, written incrementally as each file is processed |
 | `outliers_monthly.duckdb` | Same data in a DuckDB table, inserted incrementally |
-| `outliers_global.json` | Trips above the global 90th percentile, written once all files are loaded |
+| `outliers_global.parquet` | Trips above the global 90th percentile, written once all files are loaded |
 | `outliers_global.duckdb` | Same global data in a DuckDB table |
 
 Every record includes `month`, `source_file`, and `threshold` so each trip is traceable back to where it came from and what bar it was measured against.
@@ -156,22 +156,38 @@ Processing 206 file(s)...
 
   2026-01 ...
     downloading 100% (64/64 MB)
-  358,627 outliers (monthly threshold: 8.76 mi)
+  For 2026-01: 358,627 outliers found (monthly threshold: 8.76 mi)
   2026-02 ...
     downloading 100% (59/59 MB)
-  328,156 outliers (monthly threshold: 8.54 mi)
+  For 2026-02: 328,156 outliers found (monthly threshold: 8.54 mi)
   ...
 
 Monthly pass complete — 42,847,201 total outlier trips
-Wrote outliers_monthly.json
+Wrote outliers_monthly.parquet
 Wrote outliers_monthly.duckdb
 
 Global p90 threshold: 9.12 mi
-Wrote outliers_global.json
+Wrote outliers_global.parquet
 Wrote outliers_global.duckdb
 ```
 
-### 4. Query the DuckDB output
+### 4. Query the outputs
+
+**Parquet files** (via Polars or DuckDB):
+
+```python
+import polars as pl
+
+# Monthly outliers
+df = pl.read_parquet("outliers_monthly.parquet")
+print(df.group_by("month").agg(pl.len().alias("trips")).sort("month"))
+
+# Global outliers
+df = pl.read_parquet("outliers_global.parquet")
+print(df.shape)
+```
+
+**DuckDB files:**
 
 ```python
 import duckdb
@@ -182,6 +198,8 @@ con.sql("SELECT month, COUNT(*) AS trips FROM trips GROUP BY month ORDER BY mont
 con = duckdb.connect("outliers_global.duckdb")
 con.sql("SELECT COUNT(*) FROM trips").show()
 ```
+
+Parquet is significantly more compact than JSON for this dataset — a month with 300k outlier rows that would be ~150MB as JSON compresses to ~15MB as Parquet.
 
 ### 5. Record format
 

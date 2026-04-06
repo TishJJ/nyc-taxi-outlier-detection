@@ -4,12 +4,12 @@ NYC Yellow Taxi — Distance Outlier Finder
 Finds yellow taxi trips above the 90th percentile of trip_distance.
 
 Four outputs:
-  outliers_monthly.json    — trips above the per-month 90th percentile,
-                             written incrementally as each file is processed.
+  outliers_monthly.parquet — trips above the per-month 90th percentile,
+                               written incrementally as each file is processed.
   outliers_monthly.duckdb  — same data, inserted into a DuckDB table as each
-                             file is processed.
-  outliers_global.json     — trips above the global 90th percentile, written
-                             once all files have been loaded.
+                               file is processed.
+  outliers_global.parquet  — trips above the global 90th percentile, written
+                               once all files have been loaded.
   outliers_global.duckdb   — same global data in a DuckDB table.
 
 Why two thresholds:
@@ -38,7 +38,6 @@ Why scrape the TLC page instead of generating URLs:
 import gc
 import os
 import tempfile
-import json
 import numpy as np
 import random
 import time
@@ -63,9 +62,9 @@ USER_AGENT = (
     "Chrome/124.0.0.0 Safari/537.36"
 )
 
-MONTHLY_JSON   = Path("outliers_monthly.json")
+MONTHLY_PARQUET = Path("outliers_monthly.parquet")
 MONTHLY_DUCKDB = Path("outliers_monthly.duckdb")
-GLOBAL_JSON    = Path("outliers_global.json")
+GLOBAL_PARQUET  = Path("outliers_global.parquet")
 GLOBAL_DUCKDB  = Path("outliers_global.duckdb")
 
 
@@ -235,24 +234,20 @@ def write_monthly(
     threshold:  float,
     month:      str,
     url:        str,
-    json_path:  Path,
     duckdb_con: duckdb.DuckDBPyConnection,
 ) -> None:
-    """Append one month of outliers to the JSON file and DuckDB table."""
+    """Append one month of outliers to the monthly Parquet file and DuckDB table."""
     df = df.with_columns([
         pl.lit(month).alias("month"),
         pl.lit(url).alias("source_file"),
         pl.lit(threshold).alias("threshold"),
     ])
 
-    try:
-        existing = json.loads(json_path.read_text()) if json_path.exists() else []
-        if not isinstance(existing, list):
-            existing = []
-    except (json.JSONDecodeError, ValueError):
-        existing = []
-    existing.extend(df.to_dicts())
-    json_path.write_text(json.dumps(existing, indent=2, default=str))
+    # Parquet — append by reading existing, concatenating, rewriting
+    if MONTHLY_PARQUET.exists():
+        existing = pl.read_parquet(MONTHLY_PARQUET)
+        df = pl.concat([existing, df])
+    df.write_parquet(MONTHLY_PARQUET)
 
     duckdb_con.execute("""
         INSERT INTO trips
@@ -277,9 +272,8 @@ def write_global(monthly_con: duckdb.DuckDBPyConnection, percentile: float = 0.9
         ORDER BY trip_distance DESC
     """).pl()
 
-    records = global_df.with_columns(pl.lit(threshold).alias("threshold")).to_dicts()
-    GLOBAL_JSON.write_text(json.dumps(records, indent=2, default=str))
-    print(f"Wrote {GLOBAL_JSON} ({len(records):,} records)")
+    global_df.with_columns(pl.lit(threshold).alias("threshold")).write_parquet(GLOBAL_PARQUET)
+    print(f"Wrote {GLOBAL_PARQUET} ({len(global_df):,} records)")
 
     global_con = init_duckdb(GLOBAL_DUCKDB)
     try:
@@ -303,7 +297,7 @@ def process_yellow(
     if resuming:
         print(f"Resuming — {len(done)} month(s) already done, skipping them.")
     else:
-        MONTHLY_JSON.unlink(missing_ok=True)
+        MONTHLY_PARQUET.unlink(missing_ok=True)
     monthly_con = init_duckdb(MONTHLY_DUCKDB, resume=resuming)
 
     try:
@@ -325,8 +319,8 @@ def process_yellow(
                     time.sleep(random.uniform(0.75, 3.0))
                     continue
 
-                write_monthly(df, threshold, month, url, MONTHLY_JSON, monthly_con)
-                print(f"{len(df):,} outliers (monthly threshold: {threshold:.2f} mi)")
+                write_monthly(df, threshold, month, url, monthly_con)
+                print(f"For {month}: {len(df):,} outliers found (monthly threshold: {threshold:.2f} mi)")
 
                 # Explicitly free the DataFrame before next iteration
                 del df
@@ -341,7 +335,7 @@ def process_yellow(
 
         total = monthly_con.execute("SELECT COUNT(*) FROM trips").fetchone()[0]
         print(f"\nMonthly pass complete — {total:,} total outlier trips")
-        print(f"Wrote {MONTHLY_JSON}")
+        print(f"Wrote {MONTHLY_PARQUET}")
         print(f"Wrote {MONTHLY_DUCKDB}")
 
         done_count = monthly_con.execute("SELECT COUNT(DISTINCT month) FROM trips").fetchone()[0]
@@ -359,8 +353,7 @@ def process_yellow(
     finally:
         monthly_con.close()
 
-# ── Entry point ───────────────────────────────────────────────────────────────
-
+# Cleaning code if the cache needs to be cleared and the process restarted from scratch. Use with caution!
 def clean():
     # Delete existing output files if they exist
     MONTHLY_JSON.unlink(missing_ok=True)
@@ -371,6 +364,9 @@ def clean():
         wal_path.unlink()
 
     print("Cleaned up existing monthly output files.")
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     #clean()
